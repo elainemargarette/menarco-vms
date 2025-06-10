@@ -1,196 +1,403 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash
 import sqlite3
 from datetime import datetime
+import hashlib
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # required for sessions to work
+app.secret_key = "your_secret_key_change_in_production"
 
 ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "admin123"
+ADMIN_PASSWORD = "admin123"  # Default password for initial setup
 
-# Simple in-memory user store for registered users (excluding admin)
-users = {}
 
-# Initialize database for visitor logs (you can also create it separately)
+# Database helper functions
+def get_db_connection():
+    conn = sqlite3.connect("visitors.db")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def hash_password(password):
+    """Hash password using SHA-256"""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
 def init_db():
-    conn = sqlite3.connect('visitors.db')
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS visits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            purpose TEXT,
-            check_in_time TEXT,
-            check_out_time TEXT
+    with get_db_connection() as conn:
+        # Create visits table
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS visits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                purpose TEXT NOT NULL,
+                check_in_time TEXT NOT NULL,
+                check_out_time TEXT
+            )
+        """
         )
-    ''')
-    conn.commit()
-    conn.close()
+
+        # Create users table
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                contact TEXT NOT NULL,
+                address TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                role TEXT DEFAULT 'visitor'
+            )
+        """
+        )
+
+        # Create admin user if it doesn't exist
+        admin_exists = conn.execute(
+            "SELECT username FROM users WHERE username = ? AND role = 'admin'",
+            (ADMIN_USERNAME,),
+        ).fetchone()
+
+        if not admin_exists:
+            password_hash = hash_password(ADMIN_PASSWORD)
+            created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            conn.execute(
+                """INSERT INTO users (username, name, contact, address, password_hash, created_at, role) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    ADMIN_USERNAME,
+                    "System Administrator",
+                    "admin@menarco.com",
+                    "Menarco Development HQ",
+                    password_hash,
+                    created_at,
+                    "admin",
+                ),
+            )
+            print(
+                f"Admin user created with username: {ADMIN_USERNAME} and password: {ADMIN_PASSWORD}"
+            )
+
+        conn.commit()
+
 
 init_db()
 
-@app.route('/register', methods=['GET', 'POST'])
+
+@app.route("/register", methods=["GET", "POST"])
 def register():
     error = None
-    if request.method == 'POST':
-        username = request.form['username'].strip()
-        name = request.form['name'].strip()
-        contact = request.form['contact'].strip()
-        address = request.form['address'].strip()
-        password = request.form['password']
-        confirm_password = request.form['confirm_password']
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        name = request.form.get("name", "").strip()
+        contact = request.form.get("contact", "").strip()
+        address = request.form.get("address", "").strip()
+        password = request.form.get("password", "")
+        confirm_password = request.form.get("confirm_password", "")
 
-        if password != confirm_password:
+        # Validation
+        if not all([username, name, contact, address, password]):
+            error = "All fields are required."
+        elif len(password) < 6:
+            error = "Password must be at least 6 characters long."
+        elif password != confirm_password:
             error = "Passwords do not match."
-        elif username == ADMIN_USERNAME or username in users:
+        elif username == ADMIN_USERNAME:
             error = "Username already taken."
-        elif any(user['name'] == name for user in users.values()):
-            error = "Email already registered."
         else:
-            users[username] = {
-                'name':name,
-                'contact': contact,
-                'address': address,
-                'password': password
-            }
-            flash("Registration successful! Please login.")
-            return redirect(url_for('login'))
+            try:
+                with get_db_connection() as conn:
+                    # Check if username already exists
+                    existing_user = conn.execute(
+                        "SELECT username FROM users WHERE username = ?", (username,)
+                    ).fetchone()
 
-    return render_template('register.html', error=error)
+                    if existing_user:
+                        error = "Username already taken."
+                    else:
+                        # Check if name already exists
+                        existing_name = conn.execute(
+                            "SELECT name FROM users WHERE name = ?", (name,)
+                        ).fetchone()
 
-@app.route('/login', methods=['GET', 'POST'])
+                        if existing_name:
+                            error = "Name already registered."
+                        else:
+                            # Insert new user
+                            password_hash = hash_password(password)
+                            created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                            conn.execute(
+                                """INSERT INTO users (username, name, contact, address, password_hash, created_at) 
+                                   VALUES (?, ?, ?, ?, ?, ?)""",
+                                (
+                                    username,
+                                    name,
+                                    contact,
+                                    address,
+                                    password_hash,
+                                    created_at,
+                                ),
+                            )
+                            conn.commit()
+                            flash("Registration successful! Please login.")
+                            return redirect(url_for("login"))
+            except sqlite3.Error as e:
+                error = "Registration failed. Please try again."
+
+    return render_template("register.html", error=error)
+
+
+@app.route("/login", methods=["GET", "POST"])
 def login():
     error = None
-    if request.method == 'POST':
-        username = request.form['username']
-        password = request.form['password']
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
 
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-            session['username'] = username
-            session['role'] = 'admin'
-            return redirect(url_for('admin_dashboard'))
-        elif username in users and users[username]['password'] == password:
-            session['username'] = username
-            session['role'] = 'visitor'
-            return redirect(url_for('visitor_dashboard'))  # ✅ Redirects to visitor dashboard
+        if not username or not password:
+            error = "Username and password are required."
         else:
-            error = 'Invalid username or password'
-    return render_template('login.html', error=error)
+            try:
+                with get_db_connection() as conn:
+                    user = conn.execute(
+                        "SELECT username, name, password_hash, role FROM users WHERE username = ?",
+                        (username,),
+                    ).fetchone()
+
+                    if user and user["password_hash"] == hash_password(password):
+                        session["username"] = username
+                        session["name"] = user["name"]
+                        session["role"] = user["role"]
+
+                        if user["role"] == "admin":
+                            return redirect(url_for("admin_dashboard"))
+                        else:
+                            return redirect(url_for("visitor_dashboard"))
+                    else:
+                        error = "Invalid username or password"
+            except sqlite3.Error:
+                error = "Login failed. Please try again."
+
+    return render_template("login.html", error=error)
 
 
-@app.route('/user_dashboard', methods=['GET', 'POST'])
-def user_dashboard():
-    if session.get('role') != 'visitor':  # changed from 'user' to 'visitor'
-        return redirect(url_for('login'))
-
-    username = session['username']
-    message = None
-
-    if request.method == 'POST':
-        purpose = request.form['purpose'].strip()
-        check_in_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-        # Save visit record to DB
-        conn = sqlite3.connect('visitors.db')
-        c = conn.cursor()
-        c.execute('INSERT INTO visits (username, purpose, check_in_time) VALUES (?, ?, ?)',
-                  (username, purpose, check_in_time))
-        conn.commit()
-        conn.close()
-
-        message = "Check-in successful at " + check_in_time
-
-    # Fetch user's visit history
-    conn = sqlite3.connect('visitors.db')
-    c = conn.cursor()
-    c.execute('SELECT id, purpose, check_in_time, check_out_time FROM visits WHERE username = ? ORDER BY check_in_time DESC', (username,))
-    visits = c.fetchall()
-    conn.close()
-
-    return render_template('user_dashboard.html', username=username, visits=visits, message=message)
-
-@app.route('/visitor-form')
-def visitor_form():
-    return render_template('visitor_form.html')
-
-
-@app.route('/visitor_dashboard')
+@app.route("/visitor_dashboard", methods=["GET", "POST"])
 def visitor_dashboard():
-    if session.get('role') != 'visitor':
-        return redirect(url_for('login'))
-    return render_template('visitor_dashboard.html', username=session.get('username'))
+    if session.get("role") != "visitor":
+        return redirect(url_for("login"))
 
-    # Fetch user's visits
-    conn = sqlite3.connect('visitors.db')
-    c = conn.cursor()
-    c.execute('SELECT id, purpose, check_in_time, check_out_time FROM visits WHERE username = ? ORDER BY check_in_time DESC', (username,))
-    visits = c.fetchall()
-    conn.close()
+    username = session["username"]
 
-    return render_template('user_dashboard.html', username=username, visits=visits, message=message)
+    if request.method == "POST":
+        purpose = request.form.get("purpose", "").strip()
+        if not purpose:
+            flash("Purpose is required for check-in.", "error")
+        else:
+            check_in_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-@app.route('/visitor/profile')
+            try:
+                with get_db_connection() as conn:
+                    conn.execute(
+                        "INSERT INTO visits (username, purpose, check_in_time) VALUES (?, ?, ?)",
+                        (username, purpose, check_in_time),
+                    )
+                    conn.commit()
+                flash(f"Check-in successful at {check_in_time}", "success")
+            except sqlite3.Error as e:
+                flash("Error during check-in. Please try again.", "error")
+
+        # Redirect to prevent form resubmission on refresh
+        return redirect(url_for("visitor_dashboard"))
+
+    # GET request - fetch user's visit history
+    try:
+        with get_db_connection() as conn:
+            visits = conn.execute(
+                "SELECT id, purpose, check_in_time, check_out_time FROM visits WHERE username = ? ORDER BY check_in_time DESC",
+                (username,),
+            ).fetchall()
+    except sqlite3.Error:
+        visits = []
+        flash("Error loading visit history.", "error")
+
+    return render_template("visitor_dashboard.html", username=username, visits=visits)
+
+
+@app.route("/visitor-form")
+def visitor_form():
+    if session.get("role") != "visitor":
+        return redirect(url_for("login"))
+    return render_template("visitor_form.html")
+
+
+@app.route("/visitor/profile")
 def visitor_profile():
-    if session.get('role') != 'visitor':
-        return redirect(url_for('visitor_dashboard'))  # Or login if preferred
-    return render_template('visitor_profile.html', username=session.get('username'))
+    if session.get("role") != "visitor":
+        return redirect(url_for("login"))
+
+    username = session.get("username")
+    user_info = {}
+
+    try:
+        with get_db_connection() as conn:
+            user = conn.execute(
+                "SELECT username, name, contact, address, created_at FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+
+            if user:
+                user_info = {
+                    "name": user["name"],
+                    "contact": user["contact"],
+                    "address": user["address"],
+                    "created_at": user["created_at"],
+                }
+    except sqlite3.Error:
+        flash("Error loading profile information.")
+
+    return render_template(
+        "visitor_profile.html", username=username, user_info=user_info
+    )
 
 
-@app.route('/visitor_checkout/<int:visitor_id>', methods=['POST'])
+@app.route("/visitor_checkout/<int:visitor_id>", methods=["POST"])
 def visitor_checkout(visitor_id):
-    if session.get('role') != 'admin':
-        return redirect(url_for('login'))
+    if session.get("role") != "admin":
+        return redirect(url_for("login"))
 
-    check_out_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    conn = sqlite3.connect('visitors.db')
-    c = conn.cursor()
-    c.execute('UPDATE visits SET check_out_time = ? WHERE id = ?', (check_out_time, visitor_id))
-    conn.commit()
-    conn.close()
+    check_out_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    flash('Visitor checked out successfully.')
-    return redirect(url_for('admin_dashboard'))
+    try:
+        with get_db_connection() as conn:
+            result = conn.execute(
+                "UPDATE visits SET check_out_time = ? WHERE id = ?",
+                (check_out_time, visitor_id),
+            )
+            conn.commit()
+
+            if result.rowcount > 0:
+                flash("Visitor checked out successfully.")
+            else:
+                flash("Visitor not found.")
+    except sqlite3.Error:
+        flash("Error during checkout.")
+
+    return redirect(url_for("admin_dashboard"))
+
 
 @app.route("/admin/dashboard")
 def admin_dashboard():
-    if session.get('role') != 'admin':
-        return redirect(url_for('login'))
+    if session.get("role") != "admin":
+        return redirect(url_for("login"))
 
-    conn = sqlite3.connect('visitors.db')
-    c = conn.cursor()
-    c.execute('SELECT id, username, purpose, check_in_time, check_out_time FROM visits ORDER BY check_in_time DESC')
-    visitors = c.fetchall()
-    conn.close()
+    try:
+        with get_db_connection() as conn:
+            visitors = conn.execute(
+                "SELECT id, username, purpose, check_in_time, check_out_time FROM visits ORDER BY check_in_time DESC"
+            ).fetchall()
+    except sqlite3.Error:
+        visitors = []
+        flash("Error loading visitor data.")
 
-    return render_template('admin_dashboard.html', visitors=visitors)
+    return render_template("admin_dashboard.html", visitors=visitors)
 
 
-@app.route('/admin/profile')
+@app.route("/admin/profile")
 def admin_profile():
-    # Pull actual admin info from session or DB
-    return render_template('admin_profile.html')
+    if session.get("role") != "admin":
+        return redirect(url_for("login"))
+
+    username = session.get("username")
+    admin_info = {}
+
+    try:
+        with get_db_connection() as conn:
+            admin = conn.execute(
+                "SELECT username, name, contact, address, created_at FROM users WHERE username = ? AND role = 'admin'",
+                (username,),
+            ).fetchone()
+
+            if admin:
+                admin_info = {
+                    "name": admin["name"],
+                    "contact": admin["contact"],
+                    "address": admin["address"],
+                    "created_at": admin["created_at"],
+                }
+    except sqlite3.Error:
+        flash("Error loading admin profile information.")
+
+    return render_template(
+        "admin_profile.html", username=username, admin_info=admin_info
+    )
 
 
-@app.route('/admin/visitor-log')
+@app.route("/admin/visitor-log")
 def admin_visitor_log():
-    visitors = [
-        (1, 'John Doe', 'Meeting', '123-456-7890', '2025-06-01 10:00 AM'),
-        (2, 'Jane Smith', 'Delivery', '987-654-3210', '2025-06-01 10:30 AM')
-    ]
-    return render_template('admin_visitor_log.html', visitors=visitors)
+    if session.get("role") != "admin":
+        return redirect(url_for("login"))
+
+    try:
+        with get_db_connection() as conn:
+            visitors = conn.execute(
+                "SELECT id, username, purpose, check_in_time, check_out_time FROM visits ORDER BY check_in_time DESC"
+            ).fetchall()
+    except sqlite3.Error:
+        visitors = []
+        flash("Error loading visitor log.")
+
+    return render_template("admin_visitor_log.html", visitors=visitors)
 
 
-@app.route('/logout')
+@app.route("/logout")
 def logout():
     session.clear()
-    return redirect(url_for('login'))
+    return redirect(url_for("home"))
 
-@app.route('/')
+
+@app.route("/")
 def home():
-    return render_template('home.html')
-
-print(app.url_map)
+    return render_template("home.html")
 
 
-if __name__ == '__main__':
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template("404.html"), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    return render_template("500.html"), 500
+
+
+def calculate_duration(check_in_str, check_out_str):
+    """Calculate duration between check-in and check-out times"""
+    try:
+        check_in = datetime.strptime(check_in_str, "%Y-%m-%d %H:%M:%S")
+        check_out = datetime.strptime(check_out_str, "%Y-%m-%d %H:%M:%S")
+        duration = check_out - check_in
+
+        hours = duration.seconds // 3600
+        minutes = (duration.seconds % 3600) // 60
+
+        if duration.days > 0:
+            return f"{duration.days}d {hours}h {minutes}m"
+        elif hours > 0:
+            return f"{hours}h {minutes}m"
+        else:
+            return f"{minutes}m"
+    except:
+        return "N/A"
+
+
+# Add the function to template context
+@app.context_processor
+def utility_processor():
+    return dict(calculate_duration=calculate_duration)
+
+
+if __name__ == "__main__":
     app.run(debug=True)

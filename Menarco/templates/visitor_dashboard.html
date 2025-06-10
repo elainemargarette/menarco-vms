@@ -1,60 +1,165 @@
-{% extends 'base_visitor.html' %}
+{% extends 'base_visitor.html' %} {% block content %}
+<div class="dashboard-container">
+    <h1>Welcome, {{ username }}!</h1>
 
-{% block content %}
-  <h1>Visitor Dashboard</h1>
-  <p>Welcome, {{ session['name'] }}!</p>
+    {% if message %}
+    <div class="alert alert-info">{{ message }}</div>
+    {% endif %} {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    <div class="alerts">
+        {% for category, message in messages %}
+        <div
+            class="alert alert-{{ 'info' if category == 'success' else 'error' }}"
+        >
+            {{ message }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %} {% endwith %}
+
+    <div class="check-in-section">
+        <h2>Check In</h2>
+        <form method="POST">
+            <div class="form-group">
+                <label for="purpose">Purpose of Visit:</label>
+                <textarea
+                    id="purpose"
+                    name="purpose"
+                    placeholder="Why are you visiting?"
+                    required
+                ></textarea>
+            </div>
+            <button type="submit" class="btn btn-primary">Check In</button>
+        </form>
+    </div>
+
+    <div class="visit-history">
+        <h2>Your Visit History</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Purpose</th>
+                    <th>Check-In Time</th>
+                    <th>Check-Out Time</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for visit in visits %}
+                <tr>
+                    <td>{{ visit.id }}</td>
+                    <td>{{ visit.purpose }}</td>
+                    <td>{{ visit.check_in_time }}</td>
+                    <td>{{ visit.check_out_time or 'Still Checked In' }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td
+                        colspan="4"
+                        style="text-align: center; font-style: italic"
+                    >
+                        No visits yet.
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<style>
+    .dashboard-container {
+        max-width: 800px;
+        margin: 0 auto;
+    }
+
+    .alert {
+        padding: 12px;
+        border-radius: 8px;
+        margin-bottom: 20px;
+    }
+
+    .alert-info {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+    }
+
+    .alert-error {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+    }
+
+    .check-in-section {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        margin-bottom: 30px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .form-group {
+        margin-bottom: 15px;
+    }
+
+    .form-group label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: 600;
+    }
+
+    .form-group textarea {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        resize: vertical;
+        min-height: 80px;
+    }
+
+    .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        text-decoration: none;
+        display: inline-block;
+    }
+
+    .btn-primary {
+        background-color: #5d8aa8;
+        color: white;
+    }
+
+    .btn-primary:hover {
+        background-color: #466f89;
+    }
+
+    .visit-history {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+    }
+
+    .table th,
+    .table td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #ddd;
+    }
+
+    .table th {
+        background-color: #f8f9fa;
+        font-weight: 600;
+    }
+</style>
 {% endblock %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <title>Visitor Dashboard</title>
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
-  <style>
-    body {
-      margin: 0;
-      font-family: 'Poppins', sans-serif;
-      display: flex;
-    }
-    .sidebar {
-      width: 220px;
-      height: 100vh;
-      background-color: #5d8aa8;
-      color: white;
-      padding-top: 40px;
-      position: fixed;
-    }
-    .sidebar a {
-      display: block;
-      padding: 15px 20px;
-      color: white;
-      text-decoration: none;
-      font-weight: 500;
-    }
-    .sidebar a:hover {
-      background-color: #466f89;
-    }
-    .main {
-      margin-left: 220px;
-      padding: 40px;
-      flex-grow: 1;
-    }
-  </style>
-</head>
-<body>
-  <div class="sidebar">
-    <a href="#">Profile</a>
-    <a href="#">Dashboard</a>
-    <a href="#">Visitor Form</a>
-    <a href="{{ url_for('logout') }}">Logout</a>
-    <a href="{{ url_for('visitor_dashboard') }}">Dashboard</a>
-
-    
-  </div>
-
-  <div class="main">
-    <h1>Welcome, {{name }}!</h1>
-    <p>This is your Visitor Dashboard.</p>
-  </div>
-</body>
-</html>
